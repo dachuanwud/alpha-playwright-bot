@@ -1,0 +1,30 @@
+---
+alwaysApply: true
+---
+## 项目结构总览
+
+- 入口与脚本
+  - `main.py`: 主交易脚本，连接已开启的 Chrome CDP（端口由 `config.py` 中的 `port` 指定），驱动页面滚动、读数、下单、取消订单、统计与节奏控制。
+  - `1_依据端口创建网页.py`: 打开已存在的 Chrome（通过 `/json/version` 获取 ws 调试地址）并跳转至 Binance 资产页面的简单示例。
+  - `2_操控浏览器测试.py`: Windows 环境下管理/复制 Chrome 程序并以 `--remote-debugging-port` 方式启动（支持多端口）。
+
+- 配置与工具
+  - `config.py`: 交易与环境配置（如 `username`, `cost`, `total_runs`, `reserved_amount`, `min_sell_amount`, `port`, `secret`, 刷新与间隔策略、价格差与百分比等）。
+  - `func.py`: Playwright 与页面操作工具集（连接浏览器、页面滚动、人类化滚动、XPath 文本获取、输入框填充、复选框切换、按钮点击、页面刷新到元素、时间控制、TOTP 生成与输入、验证器弹窗处理、余额持久化等）。
+
+- 运行关系
+  - `main.py` 依赖 `config.py` 的参数与 `func.py` 的工具函数；核心流程：
+    1) 发现并连接目标页面 → 2) 页面加载与滚动初始化 → 3) 卖出逻辑（条件、价格与数量填充、反向订单处理、提交与确认）→ 4) 取消未成交订单 → 5) 买入逻辑（切换 Tab、价格/金额设置、提交/确认或取消）→ 6) 循环刷新与节奏控制 → 7) 终局统计与余额记录。
+
+- 重要注意
+  - 需要本地已运行的 Chrome 且开启远程调试端口（默认 `9222`）。
+  - `config.py` 中的 `secret` 为谷歌验证器密钥，务必先用 `3_身份验证器测试.py` 检测（文件名提示）。
+  - 页面元素定位依赖 Binance Web UI（类名/XPath 可能会变化）。
+
+参考文件：
+- [config.py](mdc:config.py)
+- [func.py](mdc:func.py)
+- [main.py](mdc:main.py)
+- [1_依据端口创建网页.py](mdc:1_依据端口创建网页.py)
+- [2_操控浏览器测试.py](mdc:2_操控浏览器测试.py)
+

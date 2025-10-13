@@ -1,0 +1,34 @@
+---
+globs: *.py
+description: Python 代码风格、依赖与运行约定
+---
+## Python 文件约定（适用于 *.py）
+
+- 依赖与环境
+  - 需要安装 Playwright 及其浏览器内核，示例：
+    - `pip install playwright pandas pyautogui requests`
+    - `playwright install chromium`
+  - Windows 环境（见 `2_操控浏览器测试.py` 使用 `ctypes` 提权与 Chrome 启动脚本）。
+
+- 结构与导入
+  - 业务入口 `main.py` 只做流程编排；页面与浏览器操作封装在 `func.py`。
+  - 配置集中在 `config.py`，仅通过导入读取，避免在运行时修改全局配置对象。
+
+- Playwright 使用要点
+  - 采用 CDP 连接：`connect_over_cdp`，需先外部启动 Chrome 并打开目标站点。
+  - 所有页面操作通过 `page.evaluate/locator`/`keyboard` 等进行；尽量用稳定的选择器（首选 `data-*`）。
+  - 对 Binance UI 变更保持敏感，若元素失效，优先更新 XPath/CSS 于调用点或集中封装。
+
+- 安全与稳健性
+  - `secret`（谷歌验证器密钥）仅在本地测试环境使用，不应入库或明文共享。
+  - 对网络超时/验证码弹窗做显式处理（见 `pause_for_verification`、`refresh_specific_page_until_element`）。
+
+- 日志与可观测性
+  - 保持关键节点打印：页面滚动、下单、取消、刷新、时间统计。
+  - `save_balance_to_csv` 记录余额变化，便于复盘。
+
+参考文件：
+- [func.py](mdc:func.py)
+- [config.py](mdc:config.py)
+- [main.py](mdc:main.py)
+

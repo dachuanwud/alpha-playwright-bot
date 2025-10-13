@@ -1,0 +1,51 @@
+---
+alwaysApply: false
+description: 本项目运行与调试指南（CDP、端口浏览器、常见问题）
+---
+## 运行与调试指南
+
+### 1) 准备环境
+- 安装依赖：
+  - `pip install playwright pandas pyautogui requests`
+  - `playwright install chromium`
+
+### 2) 启动带远程调试端口的 Chrome
+- 方式 A：用脚本启动（适合多端口/复用配置）
+  - 参考 `2_操控浏览器测试.py`：
+    - 设置 `_chome_path` 为 Chrome 安装路径
+    - 设置 `_to_path` 为复制输出位置（例如 `F:\myChome\`）
+    - 设置 `chome_port` 与 `chome_sum`
+    - 运行脚本选择 `action = 1`（仅启动）或 `0`（复制后启动）
+
+- 方式 B：手动命令行启动（单实例）
+  - 示例（端口 `9222`）：
+    ```bash
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222 --user-data-dir="D:\\tmp\\cdp9222"
+    ```
+
+### 3) 连接并验证
+- 快速验证连接：运行 `1_依据端口创建网页.py`，会连接到 `port` 并打开 Binance 资产页面。
+- 主流程：运行 `main.py`。
+  - 自动：
+    - 连接当前活动页（排除 `devtools://`）
+    - 页面顶部/子面板滚动到位
+    - 价格/数量读取与下单
+    - 失败重试、刷新、取消未成交、节奏控制
+
+### 4) 关键配置
+- 在 `config.py` 调整：
+  - `port`, `secret`, `cost`, `total_runs`, `reserved_amount`, `min_sell_amount`, `refresh_interval`, `min_interval`, `max_interval`, `buy_price_diff`, `sell_price_percent`。
+
+### 5) 常见问题
+- 无法连接浏览器：确认 Chrome 已用 `--remote-debugging-port` 启动，且端口匹配 `config.py` 的 `port`。
+- 元素定位失败：Binance UI 变更时更新相关 XPath/CSS；优先查 `func.py` 的封装调用点。
+- 验证器阻塞：确保 `config.py.secret` 有效；`pause_for_verification` 会自动填充验证码并继续。
+- 权限问题（Windows）：`2_操控浏览器测试.py` 使用提权；如需管理员权限请以管理员运行。
+
+参考：
+- [main.py](mdc:main.py)
+- [func.py](mdc:func.py)
+- [config.py](mdc:config.py)
+- [1_依据端口创建网页.py](mdc:1_依据端口创建网页.py)
+- [2_操控浏览器测试.py](mdc:2_操控浏览器测试.py)
+

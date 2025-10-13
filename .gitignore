@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+
+# IDE / OS
+.vscode/
+.idea/
+*.log
+
+# Data & outputs
+*.csv
+初始余额_*.txt
+
+# Local browser profiles
+myChome/
+*/myChome/
+E:/myChome/
+
+# Secrets
+*.env
+
+# Cursor rules cache
+.cursor/**/cache/
+
