@@ -1,6 +1,6 @@
 import random
 import time
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 import os,datetime
 import requests
 import pandas as pd
@@ -9,6 +9,120 @@ import hmac
 import hashlib
 import struct
 import pyautogui
+
+
+# ============================================
+# 智能等待工具函数
+# ============================================
+
+def smart_wait_for_element(page, xpath, timeout=10000, state="visible"):
+    """
+    智能等待元素出现
+    
+    Args:
+        page: Playwright Page 对象
+        xpath: 元素 XPath
+        timeout: 超时时间（毫秒）
+        state: 等待状态 (visible/attached/hidden)
+    
+    Returns:
+        bool: 元素是否出现
+    """
+    try:
+        locator = page.locator(f"xpath={xpath}")
+        locator.wait_for(state=state, timeout=timeout)
+        return True
+    except PlaywrightTimeout:
+        print(f"⚠️ 等待元素超时: {xpath[:50]}...")
+        return False
+    except Exception as e:
+        print(f"⚠️ 等待元素失败: {e}")
+        return False
+
+
+def smart_wait_for_text(page, xpath, expected_text=None, timeout=10000):
+    """
+    等待元素文本出现或匹配
+    
+    Args:
+        page: Playwright Page 对象
+        xpath: 元素 XPath
+        expected_text: 期望的文本（None 表示只等待元素有文本）
+        timeout: 超时时间（毫秒）
+    
+    Returns:
+        str | None: 元素文本或 None
+    """
+    start_time = time.time()
+    timeout_sec = timeout / 1000
+    
+    while time.time() - start_time < timeout_sec:
+        try:
+            text = page.evaluate("""(xpath) => {
+                const el = document.evaluate(xpath, document, null, 
+                    XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                return el ? (el.innerText || el.textContent || '').trim() : null;
+            }""", xpath)
+            
+            if text:
+                if expected_text is None or expected_text in text:
+                    return text
+        except:
+            pass
+        
+        time.sleep(0.2)
+    
+    return None
+
+
+def smart_wait_for_network_idle(page, timeout=30000):
+    """
+    等待网络请求完成
+    
+    Args:
+        page: Playwright Page 对象
+        timeout: 超时时间（毫秒）
+    """
+    try:
+        page.wait_for_load_state("networkidle", timeout=timeout)
+        return True
+    except PlaywrightTimeout:
+        print("⚠️ 等待网络空闲超时")
+        return False
+
+
+def smart_wait_and_click(page, xpath, timeout=5000, interval=0.3):
+    """
+    智能等待元素可点击后点击
+    
+    Args:
+        page: Playwright Page 对象
+        xpath: 元素 XPath
+        timeout: 超时时间（毫秒）
+        interval: 检查间隔（秒）
+    
+    Returns:
+        bool: 是否点击成功
+    """
+    start_time = time.time()
+    timeout_sec = timeout / 1000
+    
+    while time.time() - start_time < timeout_sec:
+        try:
+            locator = page.locator(f"xpath={xpath}")
+            if locator.count() > 0:
+                # 等待元素可见并可点击
+                locator.wait_for(state="visible", timeout=1000)
+                locator.scroll_into_view_if_needed()
+                locator.click(force=True)
+                return True
+        except:
+            pass
+        
+        time.sleep(interval)
+    
+    print(f"⚠️ 等待点击超时: {xpath[:50]}...")
+    return False
 
 def get_current_page_url(port: int = 9222) -> str:
     with sync_playwright() as p:
@@ -60,19 +174,34 @@ def scroll_all_vertical_elements_to_bottom(page):
     print(f"✅ 已滚动 {count} 个有垂直滚动条的元素到底部")
 
 def can_scroll(page, xpath, direction):
+    """
+    检查元素是否可以在指定方向滚动
+    
+    Args:
+        page: Playwright Page 对象
+        xpath: 元素 XPath
+        direction: 滚动方向 (up/down/top/bottom/left/right)
+    
+    Returns:
+        bool: 是否可滚动
+    """
     return page.evaluate("""
     (xpath, direction) => {
         const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
         if (!el) return false;
-        if (direction in ["up", "down", "top", "bottom"]) {
+        
+        const style = window.getComputedStyle(el);
+        
+        // 使用 includes 检查数组包含（修复原 bug：in 操作符用于对象属性检查）
+        if (["up", "down", "top", "bottom"].includes(direction)) {
             return el.scrollHeight > el.clientHeight && 
-                   (window.getComputedStyle(el).overflowY === "auto" || window.getComputedStyle(el).overflowY === "scroll");
+                   (style.overflowY === "auto" || style.overflowY === "scroll");
         }
-        if (direction in ["left", "right"]) {
+        if (["left", "right"].includes(direction)) {
             return el.scrollWidth > el.clientWidth && 
-                   (window.getComputedStyle(el).overflowX === "auto" || window.getComputedStyle(el).overflowX === "scroll");
+                   (style.overflowX === "auto" || style.overflowX === "scroll");
         }
-        return False;
+        return false;
     }
     """, xpath, direction)
 
@@ -83,6 +212,17 @@ def human_scroll(page, xpath=None, direction="down", step_range=(50, 150),
     """
     支持六个方向滚动: up/down/top/bottom/left/right
     支持人工滚动和快速滚动。
+    
+    Args:
+        page: Playwright Page 对象
+        xpath: 元素 XPath（element 模式必需）
+        direction: 滚动方向 (up/down/top/bottom/left/right)
+        step_range: 每步滚动像素范围（人工模式）
+        delay_range: 每步延迟范围（人工模式）
+        scroll_target: 滚动目标 (element/page)
+        mode: 滚动模式 (fast/human)
+        scroll_steps: 快速滚动步数
+        wheel_delta: 滑轮滚动量
     """
     print(f"🔄 开始滚动: target={scroll_target}, direction={direction}, mode={mode}")
 
@@ -100,80 +240,75 @@ def human_scroll(page, xpath=None, direction="down", step_range=(50, 150),
                 if not xpath:
                     raise ValueError("XPath 必须提供以滚动元素")
 
-                if direction in ["up", "top"]:
-                    page.evaluate("""(xpath) => {
-                        const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                        if (el) el.scrollTop = 0;
-                    }""", xpath)
-                elif direction in ["down", "bottom"]:
-                    page.evaluate("""(xpath) => {
-                        const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                        if (el) el.scrollTop = el.scrollHeight;
-                    }""", xpath)
-                elif direction == "left":
-                    page.evaluate("""(xpath) => {
-                        const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                        if (el) el.scrollLeft = 0;
-                    }""", xpath)
-                elif direction == "right":
-                    page.evaluate("""(xpath) => {
-                        const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                        if (el) el.scrollLeft = el.scrollWidth;
-                    }""", xpath)
+                # 合并为单次 evaluate 调用
+                page.evaluate("""(xpath, direction) => {
+                    const el = document.evaluate(xpath, document, null, 
+                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    if (!el) return;
+                    
+                    switch(direction) {
+                        case 'up':
+                        case 'top':
+                            el.scrollTop = 0;
+                            break;
+                        case 'down':
+                        case 'bottom':
+                            el.scrollTop = el.scrollHeight;
+                            break;
+                        case 'left':
+                            el.scrollLeft = 0;
+                            break;
+                        case 'right':
+                            el.scrollLeft = el.scrollWidth;
+                            break;
+                    }
+                }""", xpath, direction)
                 print(f"✅ 元素框内快速滚动到 {direction} 完成")
                 return
 
-        # === 人工滚动模式 ===
+        # === 人工滚动模式（优化：合并多次 evaluate 调用为单次）===
         scroll_done = False
         while not scroll_done:
+            # 获取所有滚动信息（合并为单次调用）
             if scroll_target == "page":
-                scrollTop = page.evaluate("() => window.scrollY || document.documentElement.scrollTop")
-                scrollLeft = page.evaluate("() => window.scrollX || document.documentElement.scrollLeft")
-                viewportHeight = page.evaluate("() => window.innerHeight")
-                viewportWidth = page.evaluate("() => window.innerWidth")
-                scrollHeight = page.evaluate("() => document.body.scrollHeight")
-                scrollWidth = page.evaluate("() => document.body.scrollWidth")
+                scroll_info = page.evaluate("""() => ({
+                    scrollTop: window.scrollY || document.documentElement.scrollTop,
+                    scrollLeft: window.scrollX || document.documentElement.scrollLeft,
+                    viewportHeight: window.innerHeight,
+                    viewportWidth: window.innerWidth,
+                    scrollHeight: document.body.scrollHeight,
+                    scrollWidth: document.body.scrollWidth
+                })""")
             elif scroll_target == "element":
                 if not xpath:
                     raise ValueError("XPath 必须提供以滚动元素")
-                scrollTop = page.evaluate("""
-                (xpath) => {
-                    const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                    return el ? el.scrollTop : 0;
-                }
-                """, xpath)
-                scrollLeft = page.evaluate("""
-                (xpath) => {
-                    const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                    return el ? el.scrollLeft : 0;
-                }
-                """, xpath)
-                viewportHeight = page.evaluate("""
-                (xpath) => {
-                    const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                    return el ? el.clientHeight : 0;
-                }
-                """, xpath)
-                viewportWidth = page.evaluate("""
-                (xpath) => {
-                    const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                    return el ? el.clientWidth : 0;
-                }
-                """, xpath)
-                scrollHeight = page.evaluate("""
-                (xpath) => {
-                    const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                    return el ? el.scrollHeight : 0;
-                }
-                """, xpath)
-                scrollWidth = page.evaluate("""
-                (xpath) => {
-                    const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                    return el ? el.scrollWidth : 0;
-                }
-                """, xpath)
+                scroll_info = page.evaluate("""(xpath) => {
+                    const el = document.evaluate(xpath, document, null, 
+                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    if (!el) return null;
+                    return {
+                        scrollTop: el.scrollTop,
+                        scrollLeft: el.scrollLeft,
+                        viewportHeight: el.clientHeight,
+                        viewportWidth: el.clientWidth,
+                        scrollHeight: el.scrollHeight,
+                        scrollWidth: el.scrollWidth
+                    };
+                }""", xpath)
+                
+                if not scroll_info:
+                    print("⚠️ 未找到滚动元素")
+                    return
             else:
                 raise ValueError("scroll_target 必须是 'element' 或 'page'")
+
+            # 解构滚动信息
+            scrollTop = scroll_info["scrollTop"]
+            scrollLeft = scroll_info["scrollLeft"]
+            viewportHeight = scroll_info["viewportHeight"]
+            viewportWidth = scroll_info["viewportWidth"]
+            scrollHeight = scroll_info["scrollHeight"]
+            scrollWidth = scroll_info["scrollWidth"]
 
             # 判断是否到达目标
             if direction in ["up", "top"] and scrollTop <= 0:
@@ -193,18 +328,20 @@ def human_scroll(page, xpath=None, direction="down", step_range=(50, 150),
             if direction in ["up", "top", "left"]:
                 step = -step
 
+            # 执行滚动
             if scroll_target == "page":
                 if direction in ["up", "down", "top", "bottom"]:
                     page.evaluate(f"() => window.scrollBy(0, {step})")
                 else:
                     page.evaluate(f"() => window.scrollBy({step}, 0)")
             else:
-                page.evaluate("""
-                (xpath, stepX, stepY) => {
-                    const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                stepX = step if direction in ["left", "right"] else 0
+                stepY = step if direction in ["up", "down", "top", "bottom"] else 0
+                page.evaluate("""(xpath, stepX, stepY) => {
+                    const el = document.evaluate(xpath, document, null, 
+                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
                     if (el) el.scrollBy(stepX, stepY);
-                }
-                """, xpath, step if direction in ["left", "right"] else 0, step if direction in ["up", "down", "top", "bottom"] else 0)
+                }""", xpath, stepX, stepY)
 
             print(f"⬆ 滚动 {abs(step)} 像素, 当前 scrollTop={scrollTop}, scrollLeft={scrollLeft}")
             time.sleep(random.uniform(*delay_range))
@@ -388,50 +525,53 @@ def click_tab_by_index(page, index, timeout=3000, debug=False,port = 9222):
             print(f"⚠️ 切换 tab 出错: {e}")
         return False
 
-def fill_price_by_xpath(page, xpath, price, debug=False,port = 9222):
+def fill_price_by_xpath(page, xpath, price, debug=False, port=9222, timeout=5000, clear_first=True):
     """
-    填写 Binance 页面 limitPrice 输入框。
-    :param target_url: 目标页面 URL
-    :param xpath: 输入框 XPath
-    :param price: 要填写的价格（字符串或数字）
-    :param debug: 是否打印调试信息
+    填写 Binance 页面输入框（优化版）
+    
+    Args:
+        page: Playwright Page 对象
+        xpath: 输入框 XPath
+        price: 要填写的价格（字符串或数字）
+        debug: 是否打印调试信息
+        port: Chrome 端口（兼容参数）
+        timeout: 等待超时时间（毫秒）
+        clear_first: 是否先清空输入框
+    
+    Returns:
+        bool: 是否填写成功
     """
-    """
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
-
-        page = None
-        for context in browser.contexts:
-            for p in context.pages:
-                if target_url in p.url:
-                    page = p
-                    break
-            if page:
-                break
-
-        if not page:
-            if debug:
-                print(f"❌ 没有找到目标页面: {target_url}")
-            return False
-    """
-    if debug:
-        # print(f"📄 当前页面：{page.url}")
-        pass
-
     try:
-        element_handle =  page.locator(f"xpath={xpath}")
-        if element_handle:
-            element_handle.fill(str(price))
+        locator = page.locator(f"xpath={xpath}")
+        
+        # 检查元素是否存在
+        if locator.count() == 0:
             if debug:
-                print(f"✅ 成功填写价格: {price}")
-            return True
-        else:
-            if debug:
-                print(f"⚠️ 没有找到 XPath: {xpath}")
+                print(f"⚠️ 没有找到元素: {xpath[:50]}...")
             return False
+        
+        # 等待元素可见
+        try:
+            locator.wait_for(state="visible", timeout=timeout)
+        except PlaywrightTimeout:
+            if debug:
+                print(f"⚠️ 等待元素可见超时")
+            return False
+        
+        # 清空已有内容
+        if clear_first:
+            locator.clear()
+        
+        # 填写内容
+        locator.fill(str(price))
+        
+        if debug:
+            print(f"✅ 成功填写: {price}")
+        return True
+        
     except Exception as e:
         if debug:
-            print(f"⚠️ 填写价格失败: {e}")
+            print(f"⚠️ 填写失败: {e}")
         return False
 
 
@@ -500,62 +640,68 @@ def toggle_checkbox(page,selector, should_check=True, interval=0.5, timeout=10, 
                 print(f"⚠️ 操作失败: {e}")
             return False
 
-def click_button_by_xpath(page, xpath, timeout=3, interval=0.5, debug=False,port = 9222):
+def click_button_by_xpath(page, xpath, timeout=3, interval=0.5, debug=False, port=9222, screenshot_on_fail=False):
     """
-    点击指定 XPath 的按钮。
-    :param target_url: 目标页面 URL
-    :param xpath: 按钮 XPath
-    :param timeout: 超时时间（秒）
-    :param interval: 检测间隔（秒）
-    :param debug: 是否打印调试信息
+    点击指定 XPath 的按钮（优化版）
+    
+    Args:
+        page: Playwright Page 对象
+        xpath: 按钮 XPath
+        timeout: 超时时间（秒）
+        interval: 检测间隔（秒）
+        debug: 是否打印调试信息
+        port: Chrome 端口（兼容参数）
+        screenshot_on_fail: 失败时是否截图
+    
+    Returns:
+        bool: 是否点击成功
     """
-    """
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
-
-        page = None
-        for context in browser.contexts:
-            for p in context.pages:
-                if target_url in p.url:
-                    page = p
-                    break
-            if page:
-                break
-
-        if not page:
-            if debug:
-                print(f"❌ 没有找到目标页面: {target_url}")
-            return False
- """
     start_time = time.time()
-
-    cnt = 0
-    while True:
-        cnt = cnt + 1
-
+    last_error = None
+    
+    while time.time() - start_time < timeout:
         try:
-            button =  page.locator(f"xpath={xpath}")
-            if not button:
+            locator = page.locator(f"xpath={xpath}")
+            
+            # 检查元素是否存在
+            if locator.count() == 0:
                 if debug:
                     print("⏳ 按钮未找到，继续等待...")
-
-            else:
-                button.scroll_into_view_if_needed()
-                button.click(force=True)
-                if debug:
-                    print(f"✅ 已点击按钮：{xpath}")
-                return True
-
-            if time.time() - start_time > timeout:
-                if debug:
-                    print("❌ 超时：未找到按钮")
-                return False
-
-            time.sleep(interval)
-        except Exception as e:
+                time.sleep(interval)
+                continue
+            
+            # 等待元素可见并可点击
+            try:
+                locator.wait_for(state="visible", timeout=1000)
+            except:
+                time.sleep(interval)
+                continue
+            
+            # 滚动到可见区域并点击
+            locator.scroll_into_view_if_needed()
+            locator.click(force=True)
+            
             if debug:
-                print(f"⚠️ 点击按钮失败: {e}")
-            return False
+                print(f"✅ 已点击按钮")
+            return True
+            
+        except Exception as e:
+            last_error = e
+            time.sleep(interval)
+    
+    # 超时处理
+    if debug:
+        print(f"❌ 点击超时: {last_error or '未找到按钮'}")
+    
+    # 失败截图
+    if screenshot_on_fail:
+        try:
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            page.screenshot(path=f"logs/click_fail_{timestamp}.png")
+        except:
+            pass
+    
+    return False
 
 def random_sleep(min_seconds=1, max_seconds=5):
     """
@@ -889,7 +1035,16 @@ def pause_for_verification(page,secret, check_interval=5):
 # 输入验证码
 # ---------------------------
 def input_verification_code(page, code):
-    """模拟鼠标点击并输入验证码"""
+    """
+    模拟鼠标点击并输入验证码
+    
+    Args:
+        page: Playwright Page 对象
+        code: 6位验证码
+    
+    Returns:
+        bool: 是否输入成功
+    """
     try:
         found = page.evaluate("""
             () => {
@@ -911,21 +1066,31 @@ def input_verification_code(page, code):
             print("❌ 没有找到验证输入框")
             return False
 
-        # 点击输入框
+        # 点击输入框并聚焦
         page.evaluate("""
             () => {
                 const shadowHost = document.querySelector("#mfa-shadow-host");
                 const inputEl = shadowHost.shadowRoot.querySelector(
                     'input[data-e2e="input-mfa"]'
                 );
-                if (inputEl) inputEl.focus();
+                if (inputEl) {
+                    inputEl.focus();
+                    // 清空已有内容
+                    inputEl.value = '';
+                }
             }
         """)
-        time.sleep(0.5)
+        time.sleep(0.3)
 
-        # 模拟键盘输入
-        page.keyboard.type(code, delay=0.1)  # 每个字符延迟 0.1 秒
-        print(f"✅ 已输入验证码: {code}")
+        # 先全选并删除已有内容（双保险）
+        page.keyboard.press("Control+A")
+        time.sleep(0.05)
+        page.keyboard.press("Backspace")
+        time.sleep(0.1)
+
+        # 模拟键盘输入验证码
+        page.keyboard.type(code, delay=0.08)
+        print(f"✅ 已输入验证码: {code[:2]}****")  # 脱敏显示
         return True
 
     except Exception as e:
