@@ -1,19 +1,29 @@
 """
 Alpha 自动化交易脚本 - 优化版
 使用 Playwright 连接本地 Chrome，自动执行买卖操作
+
+支持多账号模式：
+    python main.py --account "账号A"
+    
+单账号模式（向后兼容）：
+    python main.py
 """
 import re
 import time
 import os
 import datetime
+import argparse
 from typing import Optional
 
 import pandas as pd
 
 # 导入优化后的模块
-from config import get_config, Config
+from config import get_config, get_account_config, Config
 from browser_manager import BrowserManager, random_sleep, elapsed_time
-from logger import log, info, warning, error, success, step, mask_balance
+from logger import (
+    log, info, warning, error, success, step, mask_balance,
+    use_account_logger, reset_logger
+)
 from trade_stats import TradeStats, TimedOperation
 
 
@@ -121,19 +131,58 @@ class AlphaTrader:
         try:
             self._main_loop()
         except KeyboardInterrupt:
-            warning("用户中断")
+            warning("\n⚠️ 用户中断 (Ctrl+C)")
+            self._print_interrupt_summary()
         except Exception as e:
             error(f"运行异常: {e}")
+            self._print_interrupt_summary()
         finally:
             self._cleanup()
     
+    def _print_interrupt_summary(self) -> None:
+        """中断时打印统计摘要"""
+        try:
+            # 尝试获取当前余额作为结束余额
+            self.browser.click_tab(0)
+            time.sleep(0.5)
+            balance_text = self.browser.get_text(self.XPATH["available_balance"])
+            if balance_text:
+                try:
+                    end_balance = float(balance_text.split(" ")[0])
+                    self.stats.set_end_balance(end_balance)
+                    info(f"当前余额: {end_balance:.4f}")
+                except (ValueError, IndexError):
+                    pass
+        except Exception:
+            pass
+        
+        # 打印统计摘要
+        if self.stats.start_balance > 0:
+            self.stats.print_summary()
+        else:
+            warning("无有效统计数据（未开始交易）")
+    
     def _connect(self) -> bool:
         """连接到浏览器"""
+        from browser_manager import get_current_page_url, ensure_chrome_running
+        
+        # ========== 1. 确保 Chrome 运行 ==========
+        port = self.config.browser.port
+        chrome_path = self.config.browser.chrome_path
+        user_data_dir = self.config.browser.user_data_dir
+        
+        # 自动生成 user_data_dir（如果未指定）
+        if not user_data_dir:
+            user_data_dir = f"D:\\tmp\\cdp{port}"
+        
+        if not ensure_chrome_running(port, chrome_path, user_data_dir):
+            error("无法启动 Chrome，请检查配置")
+            return False
+        
+        # ========== 2. 获取当前页面 URL ==========
         current_url = None
-        # 获取当前页面 URL
         for attempt in range(10):
-            from browser_manager import get_current_page_url
-            url = get_current_page_url(self.config.browser.port)
+            url = get_current_page_url(port)
             
             if url and "devtools" not in url:
                 current_url = url
@@ -830,24 +879,42 @@ class AlphaTrader:
         return False
     
     def _finalize(self) -> None:
-        """完成交易后的清理"""
-        step("完成交易，执行清理")
+        """完成交易后的清理和统计"""
+        step("完成交易，执行最终状态检查")
         
-        info("休息 60s，取消未成交订单...")
-        time.sleep(60)
+        # ========== 1. 等待最后一笔交易结算 ==========
+        info("等待最后一笔交易结算 (10s)...")
+        time.sleep(10)
         
+        # ========== 2. 检查并取消未成交订单 ==========
         self.browser.scroll_to("bottom")
-        self._cancel_orders()
+        pending_count = self._get_pending_order_count()
+        if pending_count > 0:
+            info(f"发现 {pending_count} 个未成交订单，执行取消...")
+            self._cancel_orders()
+            time.sleep(3)
         
+        # ========== 3. 检查并清仓 ==========
         self.browser.scroll_to("top")
+        self.browser.click_tab(1)  # 切换到卖出Tab
+        time.sleep(0.5)
         
-        # 最后一次清仓卖出
-        info("检查仓位，执行清仓")
-        self._force_sell_all()
+        holding = self._get_current_holding()
+        if holding and holding > self.config.trade.min_sell_amount:
+            info(f"发现持仓 {holding:.4f}，执行清仓...")
+            self._force_sell_all()
+            time.sleep(5)
+        else:
+            info("无需清仓，持仓为空或低于最小卖出量")
+        
+        # ========== 4. 等待余额稳定 ==========
+        info("等待余额稳定 (5s)...")
         time.sleep(5)
         
-        # 切换到买入获取最终余额（多次重试）
+        # ========== 5. 获取最终余额（多次采样确保稳定）==========
         final_balance = None
+        balance_samples = []
+        
         for retry in range(5):
             self.browser.click_tab(0)
             time.sleep(1)
@@ -855,17 +922,29 @@ class AlphaTrader:
             balance_text = self.browser.get_text(self.XPATH["available_balance"])
             if balance_text:
                 try:
-                    final_balance = float(balance_text.split(" ")[0])
-                    if final_balance > 0:
-                        break
+                    balance = float(balance_text.split(" ")[0])
+                    if balance > 0:
+                        balance_samples.append(balance)
+                        # 连续2次相同则认为稳定
+                        if len(balance_samples) >= 2 and balance_samples[-1] == balance_samples[-2]:
+                            final_balance = balance
+                            info(f"余额已稳定: {final_balance:.4f}")
+                            break
                 except (ValueError, IndexError):
                     pass
             
-            warning(f"获取最终余额失败，重试 ({retry+1}/5)...")
-            time.sleep(2)
+            if retry < 4:
+                info(f"确认余额中... ({retry+1}/5)")
+                time.sleep(2)
         
+        # 如果没有连续相同，取最后一个有效值
+        if final_balance is None and balance_samples:
+            final_balance = balance_samples[-1]
+            info(f"使用最后采样余额: {final_balance:.4f}")
+        
+        # ========== 6. 记录并统计 ==========
         if final_balance is not None and final_balance > 0:
-            info(f"最终余额: {mask_balance(final_balance)}")
+            success(f"✅ 最终余额: {final_balance:.4f} USDT")
             self._save_balance(final_balance)
             self.stats.set_end_balance(final_balance)
         else:
@@ -1113,16 +1192,102 @@ class AlphaTrader:
             self.browser.disconnect()
 
 
+def parse_args() -> argparse.Namespace:
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(
+        description="Alpha 自动化交易脚本",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  python main.py                    # 单账号模式（使用环境变量配置）
+  python main.py --account "账号A"  # 多账号模式（使用 accounts.yaml 中的配置）
+  python main.py --list             # 列出所有账号
+        """
+    )
+    
+    parser.add_argument(
+        "--account", "-a",
+        type=str,
+        default=None,
+        help="指定要运行的账号名称（对应 accounts.yaml 中的 name）"
+    )
+    
+    parser.add_argument(
+        "--list", "-l",
+        action="store_true",
+        help="列出所有账号配置"
+    )
+    
+    return parser.parse_args()
+
+
 def main():
     """主入口"""
+    args = parse_args()
+    
+    # 列出账号
+    if args.list:
+        from config import list_accounts
+        list_accounts()
+        return
+    
     try:
-        config = get_config()
+        # 根据参数选择配置来源
+        if args.account:
+            # 多账号模式：从 accounts.yaml 加载指定账号
+            config = get_account_config(args.account)
+            if not config:
+                error(f"未找到账号: {args.account}")
+                error("请检查 accounts.yaml 配置文件")
+                return
+            
+            # 切换到账号专属日志
+            use_account_logger(args.account)
+            step(f"启动账号: {args.account}")
+        else:
+            # 单账号模式：使用环境变量
+            config = get_config()
+        
+        # 创建并运行交易机器人
         trader = AlphaTrader(config)
         trader.run()
+        
     except ValueError as e:
         error(f"配置错误: {e}")
     except Exception as e:
         error(f"启动失败: {e}")
+    finally:
+        # 重置日志
+        reset_logger()
+
+
+def run_account(account_name: str) -> None:
+    """
+    运行指定账号（供多进程调用）
+    
+    Args:
+        account_name: 账号名称
+    """
+    try:
+        # 切换到账号专属日志
+        use_account_logger(account_name)
+        
+        # 获取账号配置
+        config = get_account_config(account_name)
+        if not config:
+            error(f"未找到账号配置: {account_name}")
+            return
+        
+        step(f"启动账号: {account_name}")
+        
+        # 创建并运行交易机器人
+        trader = AlphaTrader(config)
+        trader.run()
+        
+    except Exception as e:
+        error(f"账号 {account_name} 运行异常: {e}")
+    finally:
+        reset_logger()
 
 
 if __name__ == "__main__":

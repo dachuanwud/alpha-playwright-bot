@@ -1,0 +1,61 @@
+# ============================================
+# 多账号配置文件
+# ============================================
+# 脚本会自动启动 Chrome，无需手动操作
+# 每个账号使用独立的 user_data_dir 保持登录态，避免频繁扫码
+
+# 全局默认配置（可被账号级配置覆盖）
+defaults:
+  # 交易配置
+  cost: 256                    # 单次交易额 (USDT)
+  total_runs: 36               # 执行次数
+  reserved_amount: 0           # 保留币数（不卖出）
+  min_sell_amount: 1           # 最小卖出量
+
+  # 间隔配置
+  refresh_interval: 5          # 每N次循环刷新页面
+  min_interval: 5              # 最小休息间隔（秒）
+  max_interval: 10             # 最大休息间隔（秒）
+  reverse_order_timeout: 30    # 反向订单超时（秒）
+
+  # 价格配置
+  buy_price_percent: 1.0001    # 买入价格上浮百分比
+  buy_price_diff: 0            # 买入价格固定差值
+  sell_price_percent: 0.9998   # 卖出价格百分比
+
+  # 浏览器配置
+  timeout: 5000                # 页面超时（毫秒）
+  target_url: ""               # 目标交易页面 URL（留空则自动检测）
+  
+  # Chrome 配置（自动启动）
+  chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  user_data_base: "D:\\tmp"    # 用户数据基础目录，实际目录为 {base}/cdp{port}
+
+# 账号列表
+accounts:
+  # ========== jialin 账号 ==========
+  - name: "jialin"
+    enabled: true              # 是否启用
+    port: 9222                 # Chrome 调试端口
+    secret: ""                 # 谷歌验证器密钥（留空则不自动填验证码）
+    # 以下为可选配置，不填则使用 defaults 中的值
+    # cost: 300
+    # total_runs: 50
+    # target_url 留空，脚本会自动使用当前打开的页面
+    target_url: ""
+    # user_data_dir: "D:\\tmp\\cdp9222"  # 可选：自定义用户数据目录
+
+  # ========== abin 账号 ==========
+  - name: "abin"
+    enabled: true
+    port: 9223                 # 使用不同端口
+    secret: ""
+    target_url: ""             # 留空，自动使用当前页面
+    # user_data_dir: "D:\\tmp\\cdp9223"  # 可选：自定义用户数据目录
+
+  # ========== 添加更多账号 ==========
+  # - name: "账号C"
+  #   enabled: true
+  #   port: 9224
+  #   secret: ""
+

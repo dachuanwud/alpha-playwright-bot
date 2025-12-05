@@ -879,3 +879,140 @@ def elapsed_time(start_time: float, text: str = "用时") -> None:
     seconds = elapsed % 60
     print(f"【⏱️ {text}: {hours}h {minutes}m {seconds:.2f}s】")
 
+
+# ============================================
+# Chrome 自动启动
+# ============================================
+
+def is_chrome_running(port: int = 9222) -> bool:
+    """
+    检查 Chrome 是否已在指定端口运行
+    
+    Args:
+        port: Chrome 调试端口
+        
+    Returns:
+        是否运行中
+    """
+    try:
+        resp = requests.get(f"http://127.0.0.1:{port}/json/version", timeout=3)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def start_chrome(
+    port: int = 9222,
+    chrome_path: str = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    user_data_dir: str = "",
+    wait_seconds: int = 5
+) -> bool:
+    """
+    启动带远程调试端口的 Chrome 浏览器
+    
+    Args:
+        port: 调试端口
+        chrome_path: Chrome 可执行文件路径
+        user_data_dir: 用户数据目录（用于保持登录状态）
+        wait_seconds: 启动后等待秒数
+        
+    Returns:
+        是否启动成功
+    """
+    import subprocess
+    import platform
+    
+    # 如果已经在运行，直接返回
+    if is_chrome_running(port):
+        info(f"Chrome 已在端口 {port} 运行")
+        return True
+    
+    # 自动生成 user_data_dir（如果未指定）
+    if not user_data_dir:
+        if platform.system() == "Windows":
+            user_data_dir = f"D:\\tmp\\cdp{port}"
+        else:
+            user_data_dir = f"/tmp/cdp{port}"
+    
+    # 确保用户数据目录存在
+    os.makedirs(user_data_dir, exist_ok=True)
+    
+    # 构建启动命令
+    args = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={user_data_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    
+    info(f"🚀 启动 Chrome (端口: {port})...")
+    info(f"   路径: {chrome_path}")
+    info(f"   数据目录: {user_data_dir}")
+    
+    try:
+        # Windows 使用 subprocess.Popen 启动，不阻塞
+        if platform.system() == "Windows":
+            subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+            )
+        else:
+            subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+        
+        # 等待 Chrome 启动
+        info(f"⏳ 等待 Chrome 启动 ({wait_seconds}s)...")
+        time.sleep(wait_seconds)
+        
+        # 验证是否启动成功
+        if is_chrome_running(port):
+            success(f"✅ Chrome 启动成功 (端口: {port})")
+            return True
+        else:
+            # 再等待几秒重试
+            info("Chrome 还在启动中，再等待 5s...")
+            time.sleep(5)
+            if is_chrome_running(port):
+                success(f"✅ Chrome 启动成功 (端口: {port})")
+                return True
+            else:
+                error(f"❌ Chrome 启动失败 (端口: {port})")
+                return False
+                
+    except FileNotFoundError:
+        error(f"❌ Chrome 路径无效: {chrome_path}")
+        error("请检查 accounts.yaml 中的 chrome_path 配置")
+        return False
+    except Exception as e:
+        error(f"❌ 启动 Chrome 失败: {e}")
+        return False
+
+
+def ensure_chrome_running(
+    port: int = 9222,
+    chrome_path: str = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    user_data_dir: str = ""
+) -> bool:
+    """
+    确保 Chrome 在指定端口运行（如果没运行则启动）
+    
+    Args:
+        port: 调试端口
+        chrome_path: Chrome 可执行文件路径
+        user_data_dir: 用户数据目录
+        
+    Returns:
+        Chrome 是否可用
+    """
+    if is_chrome_running(port):
+        info(f"✅ Chrome 已在端口 {port} 运行")
+        return True
+    
+    return start_chrome(port, chrome_path, user_data_dir)
